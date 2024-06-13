@@ -30,6 +30,11 @@ impl<'a> MessageView<'a> {
         Ok(&self.chunk_bytes()[self.start_index..self.end_index])
     }
 
+    /// Size of the message, in bytes
+    pub fn size(&self) -> u64 {
+        (self.end_index - self.start_index + 1) as u64
+    }
+
     /// Turns a `MessageView` into a Rust struct
     pub fn instantiate<'de, T>(&self) -> Result<T, Error>
     where
