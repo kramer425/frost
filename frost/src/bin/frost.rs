@@ -1,4 +1,4 @@
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
@@ -45,10 +45,13 @@ fn args() -> Opts {
     let use_types: parsers::ParseFlag<bool> = long("types")
         .help("Aggregate size information by type")
         .switch();
-    let size_cmd = construct!(Opts::SizeOptions { use_types, file_path })
-        .to_options()
-        .descr("Print size info about topics or types with --types")
-        .command("size");
+    let size_cmd = construct!(Opts::SizeOptions {
+        use_types,
+        file_path
+    })
+    .to_options()
+    .descr("Print size info about topics or types with --types")
+    .command("size");
     let parser = construct!([info_cmd, topics_cmd, types_cmd, size_cmd]);
     parser.to_options().version(env!("CARGO_PKG_VERSION")).run()
 }
@@ -183,7 +186,7 @@ fn print_all(metadata: &BagMetadata, minimal: bool, writer: &mut impl Write) -> 
         return Ok(());
     }
 
-    let max_type_len = max_type_len(metadata);
+    let max_type_len: usize = max_type_len(metadata);
     for (i, (data_type, md5sum)) in metadata
         .connection_data
         .values()
@@ -226,7 +229,12 @@ fn print_all(metadata: &BagMetadata, minimal: bool, writer: &mut impl Write) -> 
     Ok(())
 }
 
-fn print_size(file_path: PathBuf, metadata: &BagMetadata, use_types: bool, writer: &mut impl Write) -> Result<(), Error> {
+fn print_size(
+    file_path: PathBuf,
+    metadata: &BagMetadata,
+    use_types: bool,
+    writer: &mut impl Write,
+) -> Result<(), Error> {
     writer.write_all(
         format!(
             "{0: <13}{1}\n",
@@ -241,20 +249,44 @@ fn print_size(file_path: PathBuf, metadata: &BagMetadata, use_types: bool, write
     writer
         .write_all(format!("{0: <13}{1}\n", "size:", human_bytes(metadata.num_bytes)).as_bytes())?;
 
-    let mut topic_to_size = HashMap::new();
+    let topics_to_types: HashMap<&str, &str> = metadata.topics_and_types().into_iter().collect();
+    let mut size_map = HashMap::new();
     let bag = DecompressedBag::from_file(file_path).unwrap();
     for msg_view in bag.read_messages(&Query::all()).unwrap() {
         let size = msg_view.size();
-        let entry = topic_to_size.entry(msg_view.topic).or_insert(0);
-        *entry += size;
+        if use_types {
+            let data_type = *topics_to_types.get(msg_view.topic).unwrap();
+            let entry: &mut u64 = size_map.entry(data_type).or_insert(0);
+            *entry += size;
+        } else {
+            let entry = size_map.entry(msg_view.topic).or_insert(0);
+            *entry += size;
+        }
     }
-    
-    let max_topic_len = max_topic_len(metadata);
+
     let start_padding = 4;
-    let second_padding = std::cmp::max(max_topic_len-start_padding, 13-start_padding);
-    for (topic, sum) in topic_to_size.iter().sorted_by_cached_key(|(_, sum)| -(**sum as i64)){
-        writer
-        .write_all(format!("{0: <start_padding$}{1: <second_padding$} {2:>10}\n", "", topic, human_bytes(*sum)).as_bytes())?;
+
+    let second_padding = {
+        let key_len = if use_types {
+            max_type_len(metadata)
+        } else {
+            max_topic_len(metadata)
+        };
+        key_len + 4
+    };
+    for (key, sum) in size_map
+        .iter()
+        .sorted_by_cached_key(|(_, sum)| -(**sum as i64))
+    {
+        writer.write_all(
+            format!(
+                "{0: <start_padding$}{1: <second_padding$} {2:>10}\n",
+                "",
+                key,
+                human_bytes(*sum)
+            )
+            .as_bytes(),
+        )?;
     }
     Ok(())
 }
@@ -279,7 +311,10 @@ fn main() -> Result<(), Error> {
             let metadata = BagMetadata::from_file(file_path)?;
             print_types(&metadata, &mut writer)
         }
-        Opts::SizeOptions { use_types, file_path } => {
+        Opts::SizeOptions {
+            use_types,
+            file_path,
+        } => {
             let metadata = BagMetadata::from_file(&file_path)?;
             print_size(file_path, &metadata, use_types, &mut writer)
         }
